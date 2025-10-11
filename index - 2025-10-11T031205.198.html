@@ -1,0 +1,31 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width">
+  <title>Water Quest</title>
+  <link href="style.css" rel="stylesheet" type="text/css" />
+</head>
+<body>
+  <div class="container">
+    <img src="img/cw_logo_horizontal.png" alt="charity: water banner" class="cw-banner" />
+    <h1>Water Quest</h1>
+    <p class="game-instructions">Collect 20 items to complete the game!</p>
+    <div class="stats">
+      <p>Cans Collected: <span id="current-cans">0</span></p>
+  <p>Time Left: <span id="timer">60</span>s</p>
+    </div>
+    <div id="achievements" class="achievement"></div>
+    <div class="game-grid"></div>
+    <button id="start-game">Start Game</button>
+    <button id="pause-game">Pause</button>
+    <button id="reset-game">Reset</button>
+    <div id="donate-btn">
+      <a href="https://www.charitywater.org/" target="_blank" rel="noopener noreferrer">
+        <button>Learn More &amp; Donate</button>
+      </a>
+    </div>
+  </div>
+  <script src="script.js"></script>
+</body>
+</html>
