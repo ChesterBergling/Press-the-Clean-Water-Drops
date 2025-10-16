@@ -189,6 +189,29 @@ button:hover {
   box-sizing: border-box;
 }
 
+/* Difficulty button row */
+.difficulty-container {
+  display: flex;
+  gap: 8px;
+  margin: 8px 0 16px 0;
+  justify-content: center;
+  width: 100%;
+}
+.difficulty-button {
+  background: #e6f7ff;
+  color: #0b6fb2;
+  border: 1px solid #cfeefc;
+  border-radius: 6px;
+  padding: 8px 12px;
+  cursor: pointer;
+  font-weight: 600;
+}
+.difficulty-button.active {
+  background: #ffd600; /* charity: water yellow for selected */
+  color: #222;
+  border-color: #ffd600;
+}
+
 @media (max-width: 500px) {
   .container {
     max-width: 98vw;

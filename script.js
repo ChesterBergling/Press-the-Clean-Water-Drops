@@ -2,9 +2,22 @@
 const GOAL_CANS = 20;
 let currentCans = 0;
 let gameActive = false;
-let spawnInterval;
+let paused = false; // previously implicit; declare explicitly
+let spawnInterval; // ...existing variable kept for compatibility but not used
+let clearTimeoutId = null;
+let spawnTimeoutId = null;
 let timerInterval;
-let timeLeft = 60; // Set initial time to 60 seconds
+let timeLeft = 60; // will be initialized to current difficulty time after grid creation
+
+// Difficulty settings (spawn rate in ms, starting time in seconds)
+const DIFFICULTY_SETTINGS = {
+  easy: { spawnRate: 900, time: 60, baseCleanChance: 0.75 },
+  medium: { spawnRate: 900, time: 60, baseCleanChance: 0.7 },
+  hard: { spawnRate: 900, time: 60, baseCleanChance: 0.6 }
+};
+
+let currentDifficulty = 'hard'; // Default difficulty is hard
+const STREAK_THRESHOLD = 3; // trigger altered probabilities after 3 in a row
 
 // Charity: water facts with motivational second sentences
 const facts = [
@@ -157,62 +170,77 @@ function createGrid() {
 // Ensure the grid is created when the page loads
 createGrid();
 
+// Initialize display time to match default difficulty
+timeLeft = DIFFICULTY_SETTINGS[currentDifficulty].time;
+updateStats();
+
+// ensure we can cancel scheduled clears
+if (typeof window._clearAllTimeoutId === 'undefined') window._clearAllTimeoutId = null;
+
 // Spawns a new item in a random grid cell
 function spawnWaterCan() {
   if (!gameActive || paused) return;
   const cells = document.querySelectorAll('.grid-cell');
-  // Always clear all cells before spawning
-  cells.forEach(cell => (cell.innerHTML = ''));
-
-  // Ensure at least one emoji is always present
-  // If for some reason no cell is available, do nothing
   if (cells.length === 0) return;
 
-  // Guarantee 65% clean, 35% dirty
-    // Streak reduction logic for 60/40 split
-    if (typeof window.dropStreak === 'undefined') {
-      window.dropStreak = { type: null, count: 0 };
-    }
-    let chance = 0.6;
-    if (window.dropStreak.count >= 4) {
-      // If streak is clean, increase dirty chance; if dirty, increase clean chance
-      if (window.dropStreak.type === 'clean') {
-        chance = 0.3; // 70% dirty after 4 clean
-      } else if (window.dropStreak.type === 'dirty') {
-        chance = 0.7; // 70% clean after 4 dirty
-      }
-    }
-    let dropType;
-    if (Math.random() < chance) {
-      dropType = {
-        type: 'clean',
-        html: '<img src="img/water-can.png" alt="Water Can" class="water-drop" style="width:2em;height:2em;" />',
-        value: 1
-      };
-    } else {
-      dropType = {
-        type: 'dirty',
-        html: '<span class="water-drop" data-value="-3" style="font-size:2em;cursor:pointer;">🛢️</span>',
-        value: -3
-      };
-    }
-    // Update streak tracking
-    if (window.dropStreak.type === dropType.type) {
-      window.dropStreak.count++;
-    } else {
-      window.dropStreak.type = dropType.type;
-      window.dropStreak.count = 1;
-    }
+  // Initialize streak tracker if needed
+  if (typeof window.dropStreak === 'undefined') {
+    window.dropStreak = { type: null, count: 0 };
+  }
 
-  // Shuffle cells for random placement
+  // Get base clean chance for the current difficulty
+  let chance = DIFFICULTY_SETTINGS[currentDifficulty].baseCleanChance;
+
+  // Adjust probabilities based on streak
+  if (window.dropStreak.count >= STREAK_THRESHOLD && window.dropStreak.type) {
+    const streakType = window.dropStreak.type;
+    if (streakType === 'clean') {
+      chance = currentDifficulty === 'easy' ? 0.8 : currentDifficulty === 'medium' ? 0.7 : 0.3;
+    } else if (streakType === 'dirty') {
+      chance = currentDifficulty === 'easy' ? 0.9 : currentDifficulty === 'medium' ? 0.8 : 0.7;
+    }
+  }
+
+  // Decide drop type based on computed chance
+  let dropType;
+  if (Math.random() < chance) {
+    dropType = {
+      type: 'clean',
+      html: '<img src="img/water-can.png" alt="Water Can" class="water-drop" style="width:2em;height:2em;" />',
+      value: 1
+    };
+  } else {
+    dropType = {
+      type: 'dirty',
+      html: '<span class="water-drop" data-value="-3" style="font-size:2em;cursor:pointer;">🛢️</span>',
+      value: -3
+    };
+  }
+
+  // Use Fisher-Yates shuffle to randomize cell order, then pick first empty if available
   const shuffledCells = shuffleArray(Array.from(cells));
-  const randomCell = shuffledCells[0];
-  randomCell.innerHTML = `
+  const targetCell = shuffledCells.find(cell => !cell.querySelector('.water-drop')) || shuffledCells[0];
+
+  // Ensure only one emoji present: clear all cells before placing a new one
+  const allCells = document.querySelectorAll('.grid-cell');
+  allCells.forEach(cell => (cell.innerHTML = ''));
+
+  targetCell.innerHTML = `
     <div class="water-can-wrapper">
       ${dropType.html}
     </div>
   `;
-  const drop = randomCell.querySelector('.water-drop');
+
+  // Update streak tracking based on the spawned drop
+  if (window.lastSpawnType === dropType.type) {
+    window.dropStreak.count++;
+  } else {
+    window.dropStreak.type = dropType.type;
+    window.dropStreak.count = 1;
+  }
+  window.lastSpawnType = dropType.type;
+
+  const drop = targetCell.querySelector('.water-drop');
   if (drop) {
     drop.addEventListener('click', collectDrop);
     if (drop.tagName === 'IMG') {
@@ -220,42 +248,199 @@ function spawnWaterCan() {
       drop.style.cursor = 'pointer';
     }
   }
+
+  // Schedule clearing all cells after 1 second
+  if (clearTimeoutId) clearTimeout(clearTimeoutId);
+  clearTimeoutId = setTimeout(() => {
+    allCells.forEach(cell => (cell.innerHTML = ''));
+    clearTimeoutId = null;
+
+    // Schedule the next spawn exactly 1 second after clearing
+    if (spawnTimeoutId) clearTimeout(spawnTimeoutId);
+    spawnTimeoutId = setTimeout(() => {
+      spawnTimeoutId = null;
+      if (gameActive && !paused) spawnWaterCan();
+    }, 1000);
+  }, 1000);
 }
 
 // Collects a can
 function collectDrop(e) {
-  if (!gameActive || paused) return; // Prevent collection if paused
-  const value = parseInt(e.target.getAttribute('data-value'), 10);
-  currentCans += value;
-  if (currentCans < 0) currentCans = 0;
-  updateStats();
-  e.target.parentElement.innerHTML = '';
-  if (currentCans >= GOAL_CANS) {
-    endGame(true);
-  }
+	if (!gameActive || paused) return; // Prevent collection if paused
+
+	// If there's a pending scheduled clear, cancel it because we're clearing now
+	if (clearTimeoutId) {
+		clearTimeout(clearTimeoutId);
+		clearTimeoutId = null;
+	}
+	// If there's a pending scheduled spawn, cancel it to reschedule after the clear
+	if (spawnTimeoutId) {
+		clearTimeout(spawnTimeoutId);
+		spawnTimeoutId = null;
+	}
+
+	const value = parseInt(e.target.getAttribute('data-value'), 10);
+	currentCans += value;
+	if (currentCans < 0) currentCans = 0;
+	updateStats();
+
+	// Remove the clicked drop immediately
+	const wrapper = e.target.closest('.water-can-wrapper');
+	if (wrapper) wrapper.innerHTML = '';
+
+	// Schedule a full clear (in case any leftover) and next spawn in the exact sequence:
+	// clear now (already cleared clicked cell), then 1s later spawn next emoji
+	// we ensure no emoji visible during the 1s gap by clearing all cells now
+	const all = document.querySelectorAll('.grid-cell');
+	all.forEach(cell => (cell.innerHTML = ''));
+
+	// schedule next spawn exactly 1s after this clear
+	spawnTimeoutId = setTimeout(() => {
+		spawnTimeoutId = null;
+		if (gameActive && !paused) spawnWaterCan();
+	}, 1000);
+
+	if (currentCans >= GOAL_CANS) {
+		endGame(true);
+	}
 }
+
+// Helper to enforce a maximum interval so a new emoji appears at least every 2s
+function getSpawnRateForDifficulty(level) {
+  const raw = (DIFFICULTY_SETTINGS[level] && DIFFICULTY_SETTINGS[level].spawnRate) || 1500;
+  return Math.min(raw, 2000); // cap at 2000ms
+}
+
+// Simple canvas-based confetti (no external libs)
+function launchConfetti(duration = 3000, particleCount = 120) {
+  const canvas = document.createElement('canvas');
+  canvas.style.position = 'fixed';
+  canvas.style.left = '0';
+  canvas.style.top = '0';
+  canvas.style.pointerEvents = 'none';
+  canvas.style.zIndex = '9999';
+  document.body.appendChild(canvas);
+
+  const ctx = canvas.getContext('2d');
+  let W = canvas.width = window.innerWidth;
+  let H = canvas.height = window.innerHeight;
+
+  window.addEventListener('resize', () => {
+    W = canvas.width = window.innerWidth;
+    H = canvas.height = window.innerHeight;
+  });
+
+  const colors = ['#ffd600','#2E9DF7','#8BD1CB','#4FCB53','#FF902A','#F5402C','#F16061'];
+  const particles = [];
+  for (let i = 0; i < particleCount; i++) {
+    particles.push({
+      x: Math.random() * W,
+      y: Math.random() * -H * 0.2,
+      size: 6 + Math.random() * 8,
+      gravity: 0.3 + Math.random() * 0.6,
+      rotation: Math.random() * 2 * Math.PI,
+      tilt: Math.random() * 0.5,
+      color: colors[Math.floor(Math.random() * colors.length)],
+      vx: (Math.random() - 0.5) * 8,
+      vy: Math.random() * 4 + 2
+    });
+  }
+
+  const start = performance.now();
+  function frame(now) {
+    const elapsed = now - start;
+    ctx.clearRect(0, 0, W, H);
+    for (let p of particles) {
+      p.x += p.vx;
+      p.y += p.vy;
+      p.vy += p.gravity * 0.02;
+      p.rotation += 0.1;
+      // draw as rotated rectangle
+      ctx.save();
+      ctx.translate(p.x, p.y);
+      ctx.rotate(p.rotation);
+      ctx.fillStyle = p.color;
+      ctx.fillRect(-p.size/2, -p.size/2, p.size, p.size * 0.6);
+      ctx.restore();
+    }
+    if (elapsed < duration) {
+      requestAnimationFrame(frame);
+    } else {
+      document.body.removeChild(canvas);
+    }
+  }
+  requestAnimationFrame(frame);
+}
+
+// Set difficulty (update UI and reset game)
+function setDifficulty(level) {
+  if (!DIFFICULTY_SETTINGS[level]) return;
+
+  resetGame(); // Reset the game when difficulty changes
+  currentDifficulty = level;
+
+  // Update button active states
+  document.querySelectorAll('.difficulty-button').forEach(btn => {
+    btn.classList.toggle('active', btn.id === `difficulty-${level}`);
+  });
+
+  // Update displayed time to match the chosen difficulty
+  timeLeft = DIFFICULTY_SETTINGS[level].time;
+  updateStats();
+
+  const achievements = document.getElementById('achievements');
+  achievements.textContent = `Difficulty set to ${level}.`;
+  setTimeout(() => {
+    if (achievements.textContent === `Difficulty set to ${level}.`) achievements.textContent = '';
+  }, 1500);
+}
+
+// Add event listeners for difficulty buttons
+document.getElementById('difficulty-easy').addEventListener('click', () => setDifficulty('easy'));
+document.getElementById('difficulty-medium').addEventListener('click', () => setDifficulty('medium'));
+document.getElementById('difficulty-hard').addEventListener('click', () => setDifficulty('hard'));
 
 // Initializes and starts a new game
 function startGame() {
-  if (gameActive) return;
-  gameActive = true;
-  paused = false;
-  currentCans = 0;
-  timeLeft = 60; // Ensure timer is set to 60 seconds before and during the game
-  updateStats();
-  showRandomFact(); // Show fact at game start
-  createGrid();
-  spawnWaterCan(); // Immediately spawn the first emoji
-  spawnInterval = setInterval(spawnWaterCan, 1500); // Spawn water cans every 1.5 seconds
-  timerInterval = setInterval(() => {
-    if (!paused) {
-      timeLeft--;
-      updateStats();
-      if (timeLeft <= 0) {
-        endGame(false);
-      }
-    }
-  }, 1000);
+	if (gameActive) return;
+	gameActive = true;
+	paused = false;
+	currentCans = 0;
+	// Use the selected difficulty's starting time (now all 60s)
+	timeLeft = DIFFICULTY_SETTINGS[currentDifficulty].time;
+	updateStats();
+	showRandomFact(); // Show fact at game start
+	createGrid();
+
+	// Immediately clear any existing interval and spawn once
+	clearInterval(spawnInterval);
+	spawnWaterCan(); // Immediately spawn the first emoji
+
+	// Use the selected difficulty's spawn rate (capped to 2000ms)
+	// spawnInterval = setInterval(spawnWaterCan, getSpawnRateForDifficulty(currentDifficulty));
+
+	timerInterval = setInterval(() => {
+		if (!paused) {
+			timeLeft--;
+			updateStats();
+			if (timeLeft <= 0) {
+				endGame(false);
+			}
+		}
+	}, 1000);
+
+	// cancel any pending timeouts to avoid unexpected spawns/clears
+	if (clearTimeoutId) {
+		clearTimeout(clearTimeoutId);
+		clearTimeoutId = null;
+	}
+	if (spawnTimeoutId) {
+		clearTimeout(spawnTimeoutId);
+		spawnTimeoutId = null;
+	}
+
+	// Ensure one immediate spawn following the strict cycle
+	spawnWaterCan();
 }
 
 function pauseGame() {
@@ -268,18 +453,43 @@ function resumeGame() {
   if (!gameActive || !paused) return;
   paused = false;
   document.getElementById('achievements').textContent = '';
+  // spawn immediately so grid isn't empty until next interval
+  spawnWaterCan();
 }
 
 function resetGame() {
-  gameActive = false;
-  paused = false;
-  clearInterval(spawnInterval);
-  clearInterval(timerInterval);
-  currentCans = 0;
-  timeLeft = 60; // Reset timer to 60 seconds
-  updateStats();
-  document.getElementById('achievements').textContent = '';
-  createGrid();
+	gameActive = false;
+	paused = false;
+	clearInterval(spawnInterval);
+	clearInterval(timerInterval);
+	currentCans = 0;
+	// Reset timer to the current difficulty's starting time
+	timeLeft = DIFFICULTY_SETTINGS[currentDifficulty].time;
+	updateStats();
+	document.getElementById('achievements').textContent = '';
+	createGrid();
+
+	// Fix spawn bug: clear streak tracking so probabilities don't carry over
+	if (typeof window.dropStreak !== 'undefined') {
+		window.dropStreak.type = null;
+		window.dropStreak.count = 0;
+	} else {
+		window.dropStreak = { type: null, count: 0 };
+	}
+
+	// Ensure pause button label is consistent
+	const pauseBtn = document.getElementById('pause-game');
+	if (pauseBtn) pauseBtn.textContent = 'Pause';
+
+	// cancel pending timeouts
+	if (clearTimeoutId) {
+		clearTimeout(clearTimeoutId);
+		clearTimeoutId = null;
+	}
+	if (spawnTimeoutId) {
+		clearTimeout(spawnTimeoutId);
+		spawnTimeoutId = null;
+	}
 }
 
 function getRandomMessage(arr) {
@@ -287,15 +497,27 @@ function getRandomMessage(arr) {
 }
 
 function endGame(won) {
-  gameActive = false;
-  clearInterval(spawnInterval);
-  clearInterval(timerInterval);
-  const achievements = document.getElementById('achievements');
-  if (won) {
-    achievements.textContent = getRandomMessage(winningMessages);
-  } else {
-    achievements.textContent = getRandomMessage(losingMessages);
-  }
+	gameActive = false;
+	clearInterval(spawnInterval);
+	clearInterval(timerInterval);
+	const achievements = document.getElementById('achievements');
+	if (won) {
+		// confetti for win
+		launchConfetti();
+		achievements.textContent = getRandomMessage(winningMessages);
+	} else {
+		achievements.textContent = getRandomMessage(losingMessages);
+	}
+
+	// cancel pending timeouts
+	if (clearTimeoutId) {
+		clearTimeout(clearTimeoutId);
+		clearTimeoutId = null;
+	}
+	if (spawnTimeoutId) {
+		clearTimeout(spawnTimeoutId);
+		spawnTimeoutId = null;
+	}
 }
 
 // Set up click handler for the start button
